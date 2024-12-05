@@ -1348,7 +1348,7 @@ jobs:
     resource_class: xlarge
     working_directory: ~/
     shell: /bin/bash -eo pipefail -l
-    parallelism: 25
+    parallelism: 15
     steps:
     - attach_workspace:
         at: /home/cassandra
