@@ -85,6 +85,7 @@ import org.apache.cassandra.config.Config.DiskAccessMode;
 import org.apache.cassandra.config.Config.PaxosOnLinearizabilityViolation;
 import org.apache.cassandra.config.Config.PaxosStatePurging;
 import org.apache.cassandra.config.DurationSpec.IntMillisecondsBound;
+import org.apache.cassandra.cql3.QueryOptions;
 import org.apache.cassandra.db.ConsistencyLevel;
 import org.apache.cassandra.db.commitlog.AbstractCommitLogSegmentManager;
 import org.apache.cassandra.db.commitlog.CommitLog;
@@ -272,6 +273,8 @@ public class DatabaseDescriptor
 
     public static volatile boolean allowUnlimitedConcurrentValidations = ALLOW_UNLIMITED_CONCURRENT_VALIDATIONS.getBoolean();
 
+    private static volatile QueryOptions.DefaultReadThresholds defaultReadThresholds;
+
     /**
      * RetryStrategy which provides exponential backoff with full jitter, for use by both CMS and non-CMS members
      * when submitting a Commit request. The range and increments of the backoff times are defined by
@@ -331,6 +334,7 @@ public class DatabaseDescriptor
     private static void clear()
     {
         sstableFormats = null;
+        defaultReadThresholds = null;
         clearMBean("org.apache.cassandra.db:type=DynamicEndpointSnitch");
         clearMBean("org.apache.cassandra.db:type=EndpointSnitchInfo");
         clearMBean("org.apache.cassandra.db:type=LocationInfo");
@@ -5555,6 +5559,14 @@ public class DatabaseDescriptor
         return conf.invalid_legacy_protocol_magic_no_spam_enabled;
     }
 
+    public static QueryOptions.DefaultReadThresholds getDefaultReadThresholds()
+    {
+        if (defaultReadThresholds == null)
+            defaultReadThresholds = new QueryOptions.DefaultReadThresholds(getCoordinatorReadSizeWarnThreshold(),
+                                                                           getCoordinatorReadSizeFailThreshold());
+        return defaultReadThresholds;
+    }
+
     public static boolean getReadThresholdsEnabled()
     {
         return conf.read_thresholds_enabled;
@@ -5579,6 +5591,7 @@ public class DatabaseDescriptor
     {
         logger.info("updating  coordinator_read_size_warn_threshold to {}", value);
         conf.coordinator_read_size_warn_threshold = value;
+        defaultReadThresholds = null;
     }
 
     @Nullable
@@ -5591,6 +5604,7 @@ public class DatabaseDescriptor
     {
         logger.info("updating  coordinator_read_size_fail_threshold to {}", value);
         conf.coordinator_read_size_fail_threshold = value;
+        defaultReadThresholds = null;
     }
 
     @Nullable
