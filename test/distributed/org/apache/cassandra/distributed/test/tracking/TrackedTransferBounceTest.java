@@ -19,6 +19,8 @@
 package org.apache.cassandra.distributed.test.tracking;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -32,6 +34,7 @@ import org.apache.cassandra.distributed.Cluster;
 import org.apache.cassandra.distributed.api.IInstanceConfig;
 import org.apache.cassandra.distributed.api.IInstanceInitializer;
 import org.apache.cassandra.distributed.api.IInvokableInstance;
+import org.apache.cassandra.io.sstable.CQLSSTableWriter;
 import org.apache.cassandra.io.util.File;
 import org.apache.cassandra.tcm.ClusterMetadata;
 
@@ -177,6 +180,66 @@ public class TrackedTransferBounceTest extends TrackedTransferTestBase
 
             assertRows(cluster.get(1).executeInternal("SELECT * FROM " + tableWithKeyspace(migrationKeyspace) + " WHERE pk = ?", KEY_201), row(KEY_201, 7));
         }
+    }
+
+    @Test
+    public void testImportRespectsPendingMigrationRanges() throws IOException
+    {
+        String migrationKeyspace = "migration_import_test";
+        IInstanceInitializer initializer = ByteBuddyInjections.SkipActivation.install(1, 2, 3);
+        try (Cluster cluster = cluster(initializer))
+        {
+            ByteBuddyInjections.SkipActivation.setup(cluster, COMMIT);
+
+            cluster.schemaChange("CREATE KEYSPACE " + migrationKeyspace + " WITH replication = " +
+                                  "{'class': 'SimpleStrategy', 'replication_factor': 3} AND replication_type='untracked'");
+            cluster.schemaChange("CREATE TABLE " + tableWithKeyspace(migrationKeyspace) + " (pk BLOB PRIMARY KEY, v INT)");
+            waitForEpochOf(cluster, 1);
+
+            cluster.schemaChange("ALTER KEYSPACE " + migrationKeyspace + " WITH replication_type='tracked'");
+            waitForEpochOf(cluster, 1);
+
+            boolean migrating = cluster.get(1).callOnInstance(() -> ClusterMetadata.current().mutationTrackingMigrationState.isMigrating(migrationKeyspace));
+            assertTrue("Keyspace should be in the middle of migration before repair", migrating);
+
+            // Migrate only the shard containing KEY_100
+            cluster.get(1).nodetoolResult("repair", "--start-token", Long.toString(Long.MIN_VALUE),
+                                          "--end-token", "-3074457345618258603", "--full", migrationKeyspace)
+                   .asserts().success();
+
+            // KEY_100 falls inside the now fully-migrated shard, so the import should take the tracked path
+            Assertions.assertThatThrownBy(() -> importRow(cluster, migrationKeyspace, KEY_100, 1))
+                      .hasMessageContaining("Failed adding SSTables")
+                      .cause()
+                      .hasMessageContaining("Tracked transfer failed during COMMIT");
+            assertPendingActivation(cluster, migrationKeyspace);
+
+            // KEY_201 falls inside a still-pending shard, so the import should take the untracked path
+            List<String> failed = importRow(cluster, migrationKeyspace, KEY_201, 2);
+            Assertions.assertThat(failed).isEmpty();
+            assertRows(cluster.get(1).executeInternal("SELECT * FROM " + tableWithKeyspace(migrationKeyspace) + " WHERE pk = ?", KEY_201), row(KEY_201, 2));
+        }
+    }
+
+    private static List<String> importRow(Cluster cluster, String keyspace, ByteBuffer key, int value) throws IOException
+    {
+        String file = Files.createTempDirectory(TrackedTransferBounceTest.class.getSimpleName()).toString();
+
+        CQLSSTableWriter.Builder builder = CQLSSTableWriter.builder()
+                                                           .forTable("CREATE TABLE " + tableWithKeyspace(keyspace) + " (pk BLOB PRIMARY KEY, v INT)")
+                                                           .inDirectory(file)
+                                                           .using("INSERT INTO " + tableWithKeyspace(keyspace) + " (pk, v) VALUES (?, ?)");
+
+        try (CQLSSTableWriter writer = builder.build())
+        {
+            writer.addRow(key, value);
+        }
+
+        IInvokableInstance target = cluster.get(1);
+        return target.callOnInstance(() -> {
+            ColumnFamilyStore cfs = ColumnFamilyStore.getIfExists(keyspace, TABLE);
+            return cfs.importNewSSTables(Set.of(file), true, true, true, true, true, true, true);
+        });
     }
 
     private static List<String> getPendingSSTableDirs(IInvokableInstance instance, String keyspace)
