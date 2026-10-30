@@ -173,7 +173,11 @@ public class MutationTrackingPreviewRepairTask extends AbstractRepairTask
                     participants.add(broadcastAddressAndPort);
 
                 if (participants.isEmpty())
+                {
+                    logger.debug("Skipping tracked validation for keyspace {}. No full replica participants for {}",
+                                 keyspace, commonRange);
                     continue;
+                }
 
                 allParticipants.addAll(participants);
 
@@ -191,6 +195,12 @@ public class MutationTrackingPreviewRepairTask extends AbstractRepairTask
             for (ValidationHandle handle : handles)
                 handle.coordinator.cancel();
             promise.tryFailure(new RuntimeException("Failed to dispatch tracked validation: " + t.getMessage(), t));
+            return;
+        }
+
+        if (handles.isEmpty())
+        {
+            emitInSyncAndComplete(promise, offset);
             return;
         }
 
