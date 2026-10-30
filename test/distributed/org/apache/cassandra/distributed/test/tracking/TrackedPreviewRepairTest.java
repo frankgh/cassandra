@@ -184,10 +184,12 @@ public class TrackedPreviewRepairTest extends TestBaseImpl
 
         long[] previewFailuresBefore = previewFailuresPerNode(CLUSTER);
 
-        NodeToolResult result = CLUSTER.get(1).nodetoolResult(true, "repair", "--validate", keyspace);
+        NodeToolResult result = CLUSTER.get(1).nodetoolResult(true, "repair", "--validate", "-pr", keyspace);
         result.asserts().success();
 
         assertInSyncValidation(result, CLUSTER, keyspace, table, previewFailuresBefore);
+
+        flushAll(CLUSTER, keyspace, table);
 
         // Verify that the witness replica was excluded from validation and validated no data.
         assertThat(totalValidatedSSTables(CLUSTER.get(3), keyspace, table)).as("Witness replica must not validate SSTables").isZero();
