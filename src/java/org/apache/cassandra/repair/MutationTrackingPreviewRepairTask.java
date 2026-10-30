@@ -171,6 +171,10 @@ public class MutationTrackingPreviewRepairTask extends AbstractRepairTask
                 Set<InetAddressAndPort> participants = new HashSet<>(Sets.difference(commonRange.endpoints, commonRange.transEndpoints));
                 if (StorageService.instance.isLocalFullReplica(keyspace, commonRange.ranges))
                     participants.add(broadcastAddressAndPort);
+
+                if (participants.isEmpty())
+                    continue;
+
                 allParticipants.addAll(participants);
 
                 for (String tableName : tableNames)
